@@ -5,14 +5,7 @@
 import twitter
 
 def TwitterApi():
-    return twitter.Api(consumer_key='[consumer key]',
-                consumer_secret='[consumer secret]',
-                access_token_key='[access token]',
-                access_token_secret='[access token secret]')
-
-
-def TwitterApiContext():
-    return twitter.Api(consumer_key='[consumer key]',
-                consumer_secret='[consumer secret]',
-                access_token_key='[access token]',
-                access_token_secret='[access token secret]')
+    return twitter.Api(consumer_key='',
+                consumer_secret='',
+                access_token_key='',
+                access_token_secret='')

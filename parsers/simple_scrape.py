@@ -6,56 +6,50 @@ import redis
 import string
 import regex as re
 import time
-import raven
 import twitter
-from twitter_creds import TwitterApi, TwitterApiContext
+from twitter_creds import TwitterApi
 from api_check import check_api
 from nyt import NYTParser
+
+from nltk import bigrams
 
 reload(sys)
 sys.setdefaultencoding('utf8')
 
-from raven import Client
-
-client = Client(
-    'https://ad7b9867c209488da9baa4fbae04d8f0:b63c0acd29eb40269b52d3e6f82191d9@sentry.io/144998')
+#from raven import Client
+#client = Client('https://ad7b9867c209488da9baa4fbae04d8f0:b63c0acd29eb40269b52d3e6f82191d9@sentry.io/144998')
 
 api = TwitterApi()
-contextApi = TwitterApiContext()
 
 r = redis.StrictRedis(host='localhost', port=6379, db=0)
 
 
 parser = NYTParser
 
-def humanize_url(article):
-    return article.split('/')[-1].split('.html')[0].replace('-', ' ')
-
-
-def check_word(word, article_url, article_content):
+def check_bigram(bigram, article_url, article_content):
+    print('checking bigram (%s,%s)' % (bigram[0], bigram[1]))
     time.sleep(1)
-    if not check_api(word):
+    if not check_api(bigram):
+        print('(%s,%s) not a unique bigram' % (bigram[0], bigram[1]))
         return
+    #throttle tweets
+    print('Found a unique bigram!! (%s,%s)' % (bigram[0], bigram[1]))
     if int(r.get("recently") or 0) < 4:
         r.incr("recently")
         r.expire("recently", 60 * 30)
-        tweet_word(word, article_url, article_content)
+        #tweet_bigram(bigram, article_url, article_content)
 
 
-def tweet_word(word, article_url, article_content):
+def tweet_bigram(bigram, article_url, article_content):
     try:
-        status = api.PostUpdate(word)
-        contextApi.PostUpdate(
-            "@{} \"{}\" occurred in: {}".format(
-                status.user.screen_name,
-                context(article_content, word),
-                article_url),
-            in_reply_to_status_id=status.id,
-            verify_status_length=False)
+        tweet = ' '.join(bigram)
+        status = api.PostUpdate(tweet)
     except UnicodeDecodeError:
-        client.captureException()
+        #client.captureException()
+        pass
     except twitter.TwitterError:
-        client.captureException()
+        #client.captureException()
+        pass
 
 
 def ok_word(s):
@@ -73,6 +67,7 @@ def remove_punctuation(text):
 
 
 def normalize_punc(raw_word):
+    #set various punctuation marks to hyphen to split on
     replaced_chars = [',', '—', '”', ':', '\'', '’s', '"']
     for char in replaced_chars:
         raw_word = raw_word.replace(char,'-')
@@ -80,36 +75,26 @@ def normalize_punc(raw_word):
     return raw_word.split('-')
 
 
-def context(content, word):
-    loc = content.find(word)
-    to_period = content[loc:].find('.')
-    prev_period = content[:loc].rfind('.')
-    allowance = 45
-    if to_period < allowance:
-        end = content[loc:loc + to_period + 1]
-    else:
-        end = u'{}…'.format(content[loc:loc + allowance])
-
-    if loc - prev_period < allowance:
-        start = u'{} '.format(content[prev_period + 2: loc].strip())
-    else:
-        start = u'…{}'.format(content[loc - allowance:loc])
-
-    return u'{}{}'.format(start, end)
-
-
 def process_article(content, article):
     text = unicode(content)
     words = text.split()
-    for raw_word_h in words:
-        for raw_word in normalize_punc(raw_word_h):
-            if ok_word(raw_word):
-                word = remove_punctuation(raw_word)
-                wkey = "word:" + word
-                if not r.get(wkey):
-                    check_word(word, article, text)
-                    r.set(wkey, '1')
 
+    words = [normalize_punc(w) for w in words]
+    flat_words = [w for wl in words for w in wl if w != '']
+
+    for bigram in bigrams(flat_words):
+        #check if both words are valid
+        both_ok = True
+        for word in bigram:
+            if not ok_word(word):
+                both_ok = False
+        #check if the bigram already is in redis
+        if both_ok:
+            bigram = (remove_punctuation(bigram[0]), remove_punctuation(bigram[1]))
+            wkey = "bigram:" + ','.join(bigram)
+            if not r.get(wkey):
+                check_bigram(bigram, article, text)
+                r.set(wkey, '1')
 
 def process_links(links):
     for link in links:
@@ -122,4 +107,10 @@ def process_links(links):
             process_article(parsed_article, link)
             r.set(akey, '1')
 
-process_links(parser.feed_urls())
+def feed_urls_and_process():
+    print("getting urls")
+    links = list(set(parser.feed_urls()))
+    print("processing urls")
+    process_links(links)
+
+feed_urls_and_process()
